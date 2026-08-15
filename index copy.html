@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deer Dodge Multiplayer</title>
+<style>
+*{box-sizing:border-box;user-select:none;-webkit-user-select:none}
+body{margin:0;background:#222;overflow:hidden;font-family:Arial,sans-serif}
+canvas{display:block;margin:auto;background:#5b9e45;touch-action:none}
+#ui{position:fixed;top:10px;left:50%;transform:translateX(-50%);color:white;font-size:20px;font-weight:bold;text-shadow:2px 2px 4px #000;z-index:10;text-align:center;white-space:nowrap}
+#room{font-size:14px;margin-top:3px}
+#status{font-size:14px;color:#fff;margin-top:3px}
+#lobby{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:30;color:white;display:flex;align-items:center;justify-content:center;text-align:center}
+#lobbyBox{background:#333;padding:28px;border-radius:16px;width:min(90%,380px)}
+#lobby h1{margin-top:0}
+input,button{font:inherit;border:0;border-radius:9px;padding:12px;margin:5px}
+input{width:85%;text-align:center}
+button{cursor:pointer;padding:12px 18px}
+#gameOver{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;background:rgba(0,0,0,.65);color:white;z-index:20;text-align:center}
+#gameOver h1{font-size:50px;margin:10px}
+#gameOver p{font-size:22px}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  You: <span id="score">0</span> | Opponent: <span id="opponentScore">0</span>
+  <div id="room"></div>
+  <div id="status">Connecting...</div>
+</div>
+
+<div id="lobby">
+  <div id="lobbyBox">
+    <h1>🦌 Deer Dodge</h1>
+    <p>Create a room or join a friend's room.</p>
+    <button onclick="createRoom()">Create Room</button><br>
+    <input id="roomInput" maxlength="8" placeholder="Room code">
+    <button onclick="joinRoom()">Join Room</button>
+    <p id="lobbyMessage"></p>
+  </div>
+</div>
+
+<div id="gameOver">
+  <h1>GAME OVER</h1>
+  <p>Your score: <span id="finalScore">0</span></p>
+  <p>Opponent: <span id="finalOpponentScore">0</span></p>
+  <button onclick="location.reload()">Back to Lobby</button>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+canvas.width=500; canvas.height=800;
+
+let ws=null, roomCode="", playerId="", gameStarted=false;
+let score=0, opponentScore=0, gameRunning=true;
+let roadSpeed=5, spawnTimer=0, deer=[];
+let opponent={x:250,y:canvas.height-230,width:44,height:75,alive:true};
+const keys={left:false,right:false};
+
+const car={
+  x:canvas.width/2-22,y:canvas.height-130,width:44,height:75,speed:7,
+  color:"#e63946"
+};
+
+function connect(){
+  const protocol=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(`${protocol}://${location.host}`);
+  ws.onopen=()=>document.getElementById("status").textContent="Connected";
+  ws.onclose=()=>{
+    document.getElementById("status").textContent="Disconnected";
+    gameStarted=false;
+  };
+  ws.onmessage=e=>{
+    const msg=JSON.parse(e.data);
+    if(msg.type==="roomCreated"||msg.type==="joined"){
+      roomCode=msg.room;
+      playerId=msg.playerId;
+      document.getElementById("room").textContent="Room: "+roomCode;
+      document.getElementById("lobby").style.display="none";
+      document.getElementById("status").textContent=
+        msg.players===1?"Waiting for another player...":"2 players connected!";
+      if(msg.players>=2) startMultiplayer();
+    }
+    if(msg.type==="playerJoined"){
+      document.getElementById("status").textContent="2 players connected!";
+      startMultiplayer();
+    }
+    if(msg.type==="state"){
+      if(msg.playerId!==playerId){
+        opponent.x=msg.x;
+        opponent.alive=msg.alive;
+        opponentScore=msg.score||0;
+      }
+      if(msg.deer) deer=msg.deer;
+      if(msg.started) gameStarted=true;
+    }
+    if(msg.type==="gameOver"){
+      gameRunning=false;
+      showGameOver();
+    }
+    if(msg.type==="error"){
+      document.getElementById("lobbyMessage").textContent=msg.message;
+    }
+  };
+}
+
+function send(data){
+  if(ws&&ws.readyState===WebSocket.OPEN)
+    ws.send(JSON.stringify({...data,room:roomCode}));
+}
+
+function createRoom(){ send({type:"create"}); }
+function joinRoom(){
+  const code=document.getElementById("roomInput").value.trim().toUpperCase();
+  if(!code){document.getElementById("lobbyMessage").textContent="Enter a room code.";return;}
+  send({type:"join",room:code});
+}
+
+function startMultiplayer(){
+  if(gameStarted)return;
+  gameStarted=true;
+  gameRunning=true;
+  document.getElementById("lobby").style.display="none";
+}
+
+function spawnDeer(){
+  const lanes=[125,180,235,290,345];
+  const lane=lanes[Math.floor(Math.random()*lanes.length)];
+  deer.push({x:lane,y:-60,width:50,height:40});
+}
+
+function drawRoad(){
+  ctx.fillStyle="#5b9e45";ctx.fillRect(0,0,500,800);
+  ctx.fillStyle="#4a8738";
+  for(let y=-20;y<800;y+=45){ctx.fillRect(20,y,35,5);ctx.fillRect(440,y+20,35,5);}
+  ctx.fillStyle="#555";ctx.fillRect(90,0,320,800);
+  ctx.fillStyle="#ddd";ctx.fillRect(85,0,5,800);ctx.fillRect(410,0,5,800);
+  ctx.fillStyle="#fff";
+  for(let y=-100;y<900;y+=120)ctx.fillRect(245,y+(performance.now()/16*roadSpeed)%120,10,60);
+}
+
+function drawCar(c,color){
+  ctx.fillStyle="rgba(0,0,0,.3)";ctx.fillRect(c.x+5,c.y+6,c.width,c.height);
+  ctx.fillStyle=color;ctx.fillRect(c.x,c.y,c.width,c.height);
+  ctx.fillStyle="#9bd7e5";ctx.fillRect(c.x+7,c.y+10,c.width-14,20);
+  ctx.fillRect(c.x+7,c.y+39,c.width-14,15);
+  ctx.fillStyle="#111";
+  ctx.fillRect(c.x-5,c.y+10,7,18);ctx.fillRect(c.x+c.width-2,c.y+10,7,18);
+  ctx.fillRect(c.x-5,c.y+50,7,18);ctx.fillRect(c.x+c.width-2,c.y+50,7,18);
+  ctx.fillStyle="#fff";ctx.fillRect(c.x+5,c.y+2,8,6);ctx.fillRect(c.x+c.width-13,c.y+2,8,6);
+}
+
+function drawDeer(d){
+  ctx.fillStyle="rgba(0,0,0,.25)";ctx.fillRect(d.x+5,d.y+33,45,7);
+  ctx.fillStyle="#8b5a2b";ctx.fillRect(d.x,d.y+12,34,20);
+  ctx.fillRect(d.x+27,d.y+4,10,18);ctx.fillRect(d.x+32,d.y,18,17);
+  ctx.fillRect(d.x+5,d.y+28,5,12);ctx.fillRect(d.x+14,d.y+28,5,12);
+  ctx.fillRect(d.x+27,d.y+28,5,12);
+  ctx.strokeStyle="#5b3a1c";ctx.lineWidth=3;ctx.beginPath();
+  ctx.moveTo(d.x+38,d.y+5);ctx.lineTo(d.x+34,d.y-7);ctx.lineTo(d.x+30,d.y-12);
+  ctx.moveTo(d.x+39,d.y+5);ctx.lineTo(d.x+44,d.y-6);ctx.lineTo(d.x+49,d.y-10);ctx.stroke();
+  ctx.fillStyle="#000";ctx.fillRect(d.x+45,d.y+5,3,3);
+}
+
+function collision(a,b){
+  const p=7;
+  return a.x+p<b.x+b.width&&a.x+a.width-p>b.x&&a.y+p<b.y+b.height&&a.y+a.height-p>b.y;
+}
+
+function update(){
+  if(!gameRunning||!gameStarted)return;
+  if(keys.left)car.x-=car.speed;
+  if(keys.right)car.x+=car.speed;
+  car.x=Math.max(95,Math.min(405-car.width,car.x));
+
+  spawnTimer--;
+  if(spawnTimer<=0){
+    spawnDeer();
+    spawnTimer=Math.max(40,11-score*.025);
+  }
+
+  for(let i=deer.length-1;i>=0;i--){
+    const d=deer[i];
+    d.y+=roadSpeed;
+    if(collision(car,d)){
+      car.alive=false;
+      send({type:"dead",score});
+      gameRunning=false;
+      showGameOver();
+      return;
+    }
+    if(d.y>880){deer.splice(i,1);score+=10;}
+  }
+  roadSpeed=10+Math.floor(score/100)*.5;
+  document.getElementById("score").textContent=Math.floor(score);
+  document.getElementById("opponentScore").textContent=Math.floor(opponentScore);
+  send({type:"state",x:car.x,score,alive:true,deer});
+}
+
+function showGameOver(){
+  document.getElementById("finalScore").textContent=Math.floor(score);
+  document.getElementById("finalOpponentScore").textContent=Math.floor(opponentScore);
+  document.getElementById("gameOver").style.display="flex";
+}
+
+function loop(){
+  ctx.clearRect(0,0,500,800);
+  drawRoad();
+  for(const d of deer)drawDeer(d);
+  if(opponent.alive)drawCar(opponent,"#3498db");
+  drawCar(car,car.color);
+  update();
+  requestAnimationFrame(loop);
+}
+
+document.addEventListener("keydown",e=>{
+  if(e.key==="ArrowLeft"||e.key.toLowerCase()==="a")keys.left=true;
+  if(e.key==="ArrowRight"||e.key.toLowerCase()==="d")keys.right=true;
+});
+document.addEventListener("keyup",e=>{
+  if(e.key==="ArrowLeft"||e.key.toLowerCase()==="a")keys.left=false;
+  if(e.key==="ArrowRight"||e.key.toLowerCase()==="d")keys.right=false;
+});
+
+canvas.addEventListener("mousemove",e=>{
+  if(!gameRunning)return;
+  const r=canvas.getBoundingClientRect();
+  car.x=e.clientX-r.left-car.width/2;
+  car.x=Math.max(95,Math.min(405-car.width,car.x));
+});
+canvas.addEventListener("touchmove",e=>{
+  e.preventDefault();
+  if(!gameRunning)return;
+  const r=canvas.getBoundingClientRect();
+  car.x=e.touches[0].clientX-r.left-car.width/2;
+  car.x=Math.max(95,Math.min(405-car.width,car.x));
+},{passive:false});
+
+connect();
+loop();
+</script>
+</body>
+</html>
